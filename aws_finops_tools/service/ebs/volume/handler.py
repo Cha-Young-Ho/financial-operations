@@ -6,11 +6,13 @@ from ....interfaces.service_interface import ServiceInterface
 class VolumeInfo(TypedDict):
     """EBS volume information type definition"""
     id: str
-    name: str
     size: int
-    state: str
     type: str
-    attached_to: str
+    state: str
+    created: str
+    encrypted: bool
+    availability_zone: str
+    attachments: List[Dict[str, Any]]
     region: str
 
 
@@ -25,27 +27,16 @@ class VolumeHandler(ServiceInterface[VolumeInfo]):
                 volumes = response.get("Volumes", [])
                 
                 result = []
-                for volume in volumes:
-                    # Check instance attachment information
-                    attachments = volume.get("Attachments", [])
-                    attached_to = "Detached"
-                    if attachments:
-                        instance_id = attachments[0].get("InstanceId", "")
-                        attached_to = f"Attached to instance {instance_id}"
-                    
-                    # Check volume name tag
-                    volume_name = next(
-                        (tag["Value"] for tag in volume.get("Tags", []) if tag["Key"] == "Name"), 
-                        "No name"
-                    )
-                    
+                for vol in volumes:
                     result.append({
-                        "id": volume["VolumeId"],
-                        "name": volume_name,
-                        "size": volume["Size"],
-                        "state": volume["State"],
-                        "type": volume["VolumeType"],
-                        "attached_to": attached_to,
+                        "id": vol["VolumeId"],
+                        "size": vol["Size"],
+                        "type": vol["VolumeType"],
+                        "state": vol["State"],
+                        "created": vol["CreateTime"].strftime("%Y-%m-%d %H:%M:%S"),
+                        "encrypted": vol["Encrypted"],
+                        "availability_zone": vol["AvailabilityZone"],
+                        "attachments": vol.get("Attachments", []),
                         "region": self.region
                     })
                 
@@ -53,8 +44,31 @@ class VolumeHandler(ServiceInterface[VolumeInfo]):
             except Exception as e:
                 print(f"Failed to fetch EBS volumes: {e}")
                 return []
-
-    async def fetch_unused_volumes(self) -> List[VolumeInfo]:
-        """Fetch unused EBS volumes asynchronously"""
-        volumes = await self.fetch_data()
-        return [v for v in volumes if v["attached_to"] == "Detached"]
+    
+    async def fetch_unused_volumes(self) -> List<VolumeInfo]:
+        """Fetch unused EBS volume data asynchronously"""
+        async with aioboto3.Session(**self.session_args).client("ec2", region_name=self.region) as ec2:
+            try:
+                response = await ec2.describe_volumes(
+                    Filters=[{"Name": "status", "Values": ["available"]}]
+                )
+                volumes = response.get("Volumes", [])
+                
+                result = []
+                for vol in volumes:
+                    result.append({
+                        "id": vol["VolumeId"],
+                        "size": vol["Size"],
+                        "type": vol["VolumeType"],
+                        "state": vol["State"],
+                        "created": vol["CreateTime"].strftime("%Y-%m-%d %H:%M:%S"),
+                        "encrypted": vol["Encrypted"],
+                        "availability_zone": vol["AvailabilityZone"],
+                        "attachments": vol.get("Attachments", []),
+                        "region": self.region
+                    })
+                
+                return result
+            except Exception as e:
+                print(f"Failed to fetch unused EBS volumes: {e}")
+                return []
